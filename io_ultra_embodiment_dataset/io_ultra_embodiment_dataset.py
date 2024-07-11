@@ -12,8 +12,8 @@ import tensorflow_datasets as tfds
 import tensorflow_hub as hub
 
 
-class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
-    """DatasetBuilder for example dataset."""
+class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
+    """DatasetBuilder for IO-ULTRA-EMBODIMENT-DATASET."""
 
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {
@@ -30,7 +30,7 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
         """Dataset metadata (homepage, citation,...)."""
         return tfds.core.DatasetInfo(
             builder=self,
-            description="Dataset for pick and place task.",
+            description="IO-ULTRA-EMBODIMENT-DATASET: An egocentric, real-world dataset of embodied intelligence manipulation.",
             features=tfds.features.FeaturesDict(
                 {
                     "steps": tfds.features.Dataset(
@@ -40,7 +40,7 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
                                     "image": tfds.features.Image(
                                         shape=(1080, 1920, 3),
                                         dtype=np.uint8,
-                                        encoding_format="png",
+                                        encoding_format="jpeg",
                                         doc="Main camera RGB observation.",
                                     ),
                                     "depth": tfds.features.Image(
@@ -97,8 +97,8 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
                             "action": tfds.features.Tensor(
                                 shape=(14,),
                                 dtype=np.float32,
-                                doc="Robot end effector pose based on main RGB camera link, consists of [3x left EEF relative position, 4x left EEF relative orientation quaternions,"
-                                "3x right EEF relative position, 4x right EEF relative orientation quaternions]. ",
+                                doc="Robot end effector pose based on main RGB camera link, consists of [3x left EEF position, 4x left EEF orientation quaternions,"
+                                "3x right EEF position, 4x right EEF orientation quaternions].",
                             ),
                             "discount": tfds.features.Scalar(
                                 dtype=np.float32,
@@ -143,16 +143,12 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
         return {
-            "train": self._generate_examples(
-                path="/home/io003/data/io_data/io_rlds_test/google"
-            ),
-            # "val": self._generate_examples(
-            #     path="/home/io003/data/io_data/io_rlds_test/input/val"
-            # ),
+            "train": self._generate_examples(path="data/train"),
+            "val": self._generate_examples(path="data/val"),
         }
 
     def _generate_examples(self, path) -> Iterator[Tuple[str, Any]]:
-        """Generator of examples for each split."""
+        """Generator for each split."""
         pd = importlib.import_module("pandas")
         Image = importlib.import_module("PIL.Image")
 
@@ -211,6 +207,11 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
             # compute Kona language embedding
             language_embedding = self._embed([language_instruction])[0].numpy()
 
+            # Placeholder for missing images
+            placeholder_rgb = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            placeholder_depth = np.zeros((800, 1280, 1), dtype=np.uint16)
+            placeholder_fisheye = np.zeros((720, 1280, 3), dtype=np.uint8)
+
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
             data_length = len(csv_data)
@@ -236,26 +237,32 @@ class IoPickAndPlaceDataset(tfds.core.GeneratorBasedBuilder):
                 episode.append(
                     {
                         "observation": {
-                            "image": rgb_images[i] if i < len(rgb_images) else None,
+                            "image": (
+                                rgb_images[i]
+                                if i < len(rgb_images)
+                                else placeholder_rgb
+                            ),
                             "depth": (
                                 (depth_images[i].astype(np.uint16)).reshape(
                                     800, 1280, 1
                                 )
                                 if i < len(depth_images)
-                                else np.zeros((800, 1280, 1), dtype=np.uint16)
+                                else placeholder_depth
                             ),
                             "image_left": (
-                                cam_left_images[i] if i < len(cam_left_images) else None
+                                cam_left_images[i]
+                                if i < len(cam_left_images)
+                                else placeholder_rgb
                             ),
                             "image_right": (
                                 cam_right_images[i]
                                 if i < len(cam_right_images)
-                                else None
+                                else placeholder_rgb
                             ),
                             "image_fisheye": (
                                 cam_fisheye_images[i]
                                 if i < len(cam_fisheye_images)
-                                else None
+                                else placeholder_fisheye
                             ),
                             "main_rgb_intrinsic": np.array(
                                 [
