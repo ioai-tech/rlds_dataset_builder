@@ -44,7 +44,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                         doc="Main camera RGB observation.",
                                     ),
                                     "depth": tfds.features.Image(
-                                        shape=(800, 1280, 1),
+                                        shape=(400, 640, 1),
                                         dtype=np.uint16,
                                         encoding_format="png",
                                         doc="Main camera depth observation.",
@@ -62,7 +62,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                         doc="Right camera RGB observation.",
                                     ),
                                     "image_fisheye": tfds.features.Image(
-                                        shape=(720, 1280, 3),
+                                        shape=(1080, 1920, 3),
                                         dtype=np.uint8,
                                         encoding_format="jpeg",
                                         doc="Fisheye camera observation.",
@@ -91,6 +91,11 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                         shape=(3, 3),
                                         dtype=np.float32,
                                         doc="Fisheye camera intrinsic matrix in OpenCV convention.",
+                                    ),
+                                    "fingers_haptics": tfds.features.Tensor(
+                                        shape=(10, 96),
+                                        dtype=np.float32,
+                                        doc="The haptic data of ten fingers (resolution of 12 * 8).",
                                     ),
                                 }
                             ),
@@ -156,7 +161,8 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             if not image_root.exists():
                 return []
             image_files = sorted(
-                os.listdir(image_root), key=lambda x: int(x.split("_")[-2])
+                os.listdir(image_root),
+                key=lambda x: int(x.split("_")[-1].split(".")[0]),
             )
             images = []
 
@@ -187,12 +193,13 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             episode_path = Path(episode_path)
 
             # Define paths for different image types and data files
-            cam_rgb_path = episode_path / "images" / "cam_rgb"
-            cam_depth_path = episode_path / "images" / "cam_depth"
-            cam_left_path = episode_path / "images" / "cam_left"
-            cam_right_path = episode_path / "images" / "cam_right"
-            cam_fisheye_path = episode_path / "images" / "cam_fisheye"
-            csv_path = episode_path / "ee_pose.csv"
+            cam_rgb_path = episode_path / "images" / "rgb"
+            cam_depth_path = episode_path / "images" / "depth"
+            cam_left_path = episode_path / "images" / "usb_cam_left"
+            cam_right_path = episode_path / "images" / "usb_cam_right"
+            cam_fisheye_path = episode_path / "images" / "usb_cam_fisheye"
+            haptics_path = episode_path / "haptic"
+            ee_path = episode_path / "ee_pose.csv"
             json_path = episode_path / "annotation.json"
 
             # Read data
@@ -201,7 +208,18 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             cam_left_images = _read_images(cam_left_path)
             cam_right_images = _read_images(cam_right_path)
             cam_fisheye_images = _read_images(cam_fisheye_path)
-            csv_data = _read_csv_data(csv_path)
+            ee_data = _read_csv_data(ee_path)
+            haptic_data = []
+            for haptic_file in sorted(haptics_path.glob("*.csv")):
+                haptic_df = _read_csv_data(haptic_file)
+                haptic_data.append(
+                    haptic_df.iloc[:, 2:98].to_numpy(dtype=np.float32)
+                )  # Read from the 3rd column onward
+
+            haptic_data = np.array(
+                haptic_data
+            )  # Shape: (10, N, 96) if N is the number of rows in each CSV
+
             language_instruction = _read_json_data(json_path)
 
             # compute Kona language embedding
@@ -209,13 +227,13 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
 
             # Placeholder for missing images
             placeholder_rgb = np.zeros((1080, 1920, 3), dtype=np.uint8)
-            placeholder_depth = np.zeros((800, 1280, 1), dtype=np.uint16)
-            placeholder_fisheye = np.zeros((720, 1280, 3), dtype=np.uint8)
+            placeholder_depth = np.zeros((400, 640, 1), dtype=np.uint16)
+            placeholder_fisheye = np.zeros((1080, 1920, 3), dtype=np.uint8)
 
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
-            data_length = len(csv_data)
-            action_data = csv_data[
+            data_length = len(ee_data)
+            action_data = ee_data[
                 [
                     "left_ee_pos_x",
                     "left_ee_pos_y",
@@ -243,9 +261,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                 else placeholder_rgb
                             ),
                             "depth": (
-                                (depth_images[i].astype(np.uint16)).reshape(
-                                    800, 1280, 1
-                                )
+                                (depth_images[i].astype(np.uint16)).reshape(400, 640, 1)
                                 if i < len(depth_images)
                                 else placeholder_depth
                             ),
@@ -299,6 +315,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                     [0.0, 0.0, 1.0],
                                 ]
                             ).astype(np.float32),
+                            "fingers_haptics": haptic_data[:, i],
                         },
                         "action": action_data[i],
                         "discount": 1.0,
@@ -325,9 +342,8 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
         episode_paths = [str(p) for p in Path(path).iterdir() if p.is_dir()]
 
         # for smallish datasets, use single-thread parsing
-        # for sample in episode_paths.iterdir():
-        #     if sample.is_dir():
-        #         yield _parse_example(sample)
+        # for sample in episode_paths:
+        #     yield _parse_example(sample)
 
         # for large datasets use beam to parallelize data parsing (this will have initialization overhead)
         beam = tfds.core.lazy_imports.apache_beam
