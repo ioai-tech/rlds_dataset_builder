@@ -232,7 +232,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
 
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
-            data_length = len(ee_data)
+            data_length = len(haptic_data)
             action_data = ee_data[
                 [
                     "left_ee_pos_x",
@@ -339,7 +339,13 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             return episode_path_str, sample
 
         # create list of all examples
-        episode_paths = [str(p) for p in Path(path).iterdir() if p.is_dir()]
+        episode_paths = [
+            str(episode_path)
+            for category_path in Path(path).iterdir()
+            if category_path.is_dir()
+            for episode_path in category_path.iterdir()
+            if episode_path.is_dir()
+        ]
 
         # for smallish datasets, use single-thread parsing
         # for sample in episode_paths:
