@@ -27,13 +27,13 @@ Transformation matrices (4x4) that describe the spatial relationship between var
 
 
 ### Joint States
-177-dimensional tensor representing the joint states.
+1x177 tensor representing the joint states.
 
 ### Fingers Haptics
-10x96 tensor capturing the haptic feedback from the robot's fingers.
+10x96 tensor capturing the haptic feedback from the gloves fingers.
 
 ### End-Effector Poses
-14-dimensional tensor describing the end-effector poses for the robot's arms, including positions and orientations.
+1x14 tensor describing the end-effector poses for the hands, including positions and orientations.
 
 ### language_instruction
 Text instructions corresponding to tasks.

@@ -4,29 +4,34 @@
 
 The image dimensions and formats for the primary, left, right, depth, and fisheye cameras are as follows:
 
-- **Primary Camera (cam_rgb)**
-  - Image dimensions: 1920 x 1080 pixels
-  - Image format: JPEG
+- **Primary Camera (image)**
+  - Image dimensions: 1920 x 1080 x 3
 
-- **Left Camera (cam_left)**
-  - Image dimensions: 1920 x 1080 pixels
-  - Image format: JPEG
+- **Left Camera (image_left)**
+  - Image dimensions: 1920 x 1080 x 3
 
-- **Right Camera (cam_right)**
-  - Image dimensions: 1920 x 1080 pixels
-  - Image format: JPEG
+- **Right Camera (image_right)**
+  - Image dimensions: 1920 x 1080 x 3
 
-- **Depth Camera (cam_depth)**
-  - Image dimensions: 1280 x 800 pixels
-  - Image format: PNG
+- **Depth Camera (depth)**
+  - Image dimensions: 640 x 400 x 3
 
-- **Fisheye Camera (cam_fisheye)**
-  - Image dimensions: 1280 x 720 pixels
-  - Image format: JPEG
+- **Fisheye Camera (image_fisheye)**
+  - Image dimensions: 1920 x 1080 x 3
 
-The intrinsic matrix for the primary, depth, left, right, and fisheye cameras is of size 3 x 3.
+## Camera Intrinsic Parameters
+Parameters for each camera include focal lengths (fx, fy) and principal points (cx, cy).
 
-## Action Frame Specification
+## Camera Extrinsic Parameters
+Transformation matrices (4x4) that describe the spatial relationship between various cameras.
+
+## Joint States
+1x177 tensor representing the joint states.
+
+## Fingers Haptics
+10x96 tensor capturing the haptic feedback from the gloves fingers.
+
+## End-Effector Poses
 
 Each frame in the action sequence contains the position and orientation of the left and right end effectors relative to the primary camera link. The data is structured as follows:
 - 3x left end effector (EEF) position (x, y, z)
