@@ -100,8 +100,12 @@ class ConfigManager:
         )
 
         # Process additional cameras (left, right, fisheye)
-        for cam_id in ["cam1", "cam2", "cam3"]:
-            cam_key = {"cam1": "left", "cam2": "right", "cam3": "fisheye"}[cam_id]
+        for cam_id in ["usb_cam_left", "usb_cam_right", "usb_cam_fisheye"]:
+            cam_key = {
+                "usb_cam_left": "left",
+                "usb_cam_right": "right",
+                "usb_cam_fisheye": "fisheye",
+            }[cam_id]
             params[cam_key] = CameraParams(
                 intrinsic=np.array(
                     [camera_info[cam_id]["intrinsics"]], dtype=np.float32
@@ -194,13 +198,13 @@ class McapProcessor:
         """
         Extract robot joint state data
         Returns:
-            List of numpy arrays containing joint positions (177 joints)
+            List of numpy arrays containing joint positions (70 joints)
         """
         joint_msgs = self.get_messages_by_topic(
             "/joint_states", "sensor_msgs/JointState"
         )
         return [
-            np.array(msg.position, dtype=np.float32).reshape(1, 177)
+            np.array(msg.position, dtype=np.float32).reshape(1, 70)
             for msg in joint_msgs
         ]
 
@@ -214,10 +218,25 @@ class McapProcessor:
             "/mocap/touch_data", "io_msgs/squashed_touch"
         )
         return [
-            np.array(
-                [np.array(finger.data)[:96] for finger in msg.data], dtype=np.int32
-            )
+            np.array([np.array(finger.data)[:4] for finger in msg.data], dtype=np.int32)
             for msg in touch_msgs
+        ]
+
+    def get_gripper_angles(self) -> List[np.ndarray]:
+        """
+        Extract gripper angles from both hands
+        Returns:
+            List of numpy arrays containing right and left gripper angles in shape (1, 2)
+        """
+        right_msgs = self.get_messages_by_topic("/claws_r_hand")
+        left_msgs = self.get_messages_by_topic("/claws_l_hand")
+
+        # Make sure we have equal number of messages for both grippers
+        min_length = min(len(right_msgs), len(left_msgs))
+
+        return [
+            np.array([[right_msgs[i].angle, left_msgs[i].angle]], dtype=np.float32)
+            for i in range(min_length)
         ]
 
     def get_ee_poses(self) -> np.ndarray:
@@ -279,9 +298,9 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
     This dataset contains egocentric, real-world data of embodied intelligence manipulation.
     """
 
-    VERSION = tfds.core.Version("2.0.0")
+    VERSION = tfds.core.Version("2.1.0")
     RELEASE_NOTES = {
-        "2.0.0": "Convert mcap to RLDS.",
+        "2.1.0": "Convert gripper mcap to RLDS.",
     }
 
     def __init__(self, *args, **kwargs):
@@ -383,14 +402,19 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                                     ),
                                     # Robot state data
                                     "joint_states": tfds.features.Tensor(
-                                        shape=(1, 177),
+                                        shape=(1, 70),
                                         dtype=np.float32,
-                                        doc="The joint states of 177 joints.",
+                                        doc="The joint states of 70 joints.",
                                     ),
                                     "fingers_haptics": tfds.features.Tensor(
-                                        shape=(10, 96),
+                                        shape=(2, 4),
                                         dtype=np.int32,
-                                        doc="The haptic data of ten fingers (resolution of 12 * 8).",
+                                        doc="The haptic data of ten fingers (resolution of 2 * 2).",
+                                    ),
+                                    "gripper_closed_angles": tfds.features.Tensor(
+                                        shape=(1, 2),
+                                        dtype=np.float32,
+                                        doc="The angle at which the right and left gripper is closed. The range of values is [0, 55], where 0 means that the gripper is fully open and 55 means that the gripper is fully closed.",
                                     ),
                                 }
                             ),
@@ -508,6 +532,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             )
             joint_states = mcap_processor.get_joint_states()
             haptic_data = mcap_processor.get_touch_data()
+            gripper_closed_angles = mcap_processor.get_gripper_angles()
             action_data = mcap_processor.get_ee_poses()
 
             # Verify data consistency
@@ -521,6 +546,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                     fisheye_images,
                     joint_states,
                     haptic_data,
+                    gripper_closed_angles,
                 ]
             ]
             data_length = min(data_lengths)
@@ -594,6 +620,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                             # Robot state data
                             "joint_states": joint_states[i],
                             "fingers_haptics": haptic_data[i],
+                            "gripper_closed_angles": gripper_closed_angles[i],
                         },
                         "action": action_data[i],
                         "discount": 1.0,
@@ -625,9 +652,9 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
         ]
 
         # for smallish datasets, use single-thread parsing
-        # for sample in episode_paths:
-        #     yield _parse_example(sample)
+        for sample in episode_paths:
+            yield _parse_example(sample)
 
         # for large datasets use beam to parallelize data parsing (this will have initialization overhead)
-        beam = tfds.core.lazy_imports.apache_beam
-        return beam.Create(episode_paths) | beam.Map(_parse_example)
+        # beam = tfds.core.lazy_imports.apache_beam
+        # return beam.Create(episode_paths) | beam.Map(_parse_example)
