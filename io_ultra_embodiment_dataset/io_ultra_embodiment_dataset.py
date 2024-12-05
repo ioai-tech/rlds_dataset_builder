@@ -14,102 +14,11 @@ from io import BytesIO
 from contextlib import contextmanager
 from PIL import Image
 from mcap.reader import make_reader
-from mcap_ros1.decoder import DecoderFactory
+from mcap_ros2.decoder import DecoderFactory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CameraParams:
-    """Data class for storing camera parameters"""
-
-    intrinsic: np.ndarray  # Camera intrinsic matrix
-    extrinsic: Optional[np.ndarray] = None  # Optional camera extrinsic matrix
-
-
-class ConfigManager:
-    """Class for managing camera configuration and parameters"""
-
-    def __init__(self, config_dir: Path):
-        """
-        Initialize ConfigManager with configuration directory
-        Args:
-            config_dir: Path to configuration files directory
-        """
-        self.config_dir = config_dir
-        self.camera_params = self._load_camera_params()
-
-    def _load_yaml(self, file_path: Path) -> dict:
-        """
-        Safely load a YAML file with error handling
-        Args:
-            file_path: Path to YAML file
-        Returns:
-            dict: Parsed YAML content
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If YAML file is invalid
-        """
-        if not file_path.exists():
-            raise FileNotFoundError(f"Config file not found: {file_path}")
-        try:
-            with open(file_path, "r") as f:
-                return yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML file {file_path}: {e}")
-
-    def _load_camera_params(self) -> Dict[str, CameraParams]:
-        """
-        Load and process all camera parameters from configuration files
-        Returns:
-            Dict[str, CameraParams]: Dictionary mapping camera names to their parameters
-        """
-        # Load all required configuration files
-        camera_info = self._load_yaml(self.config_dir / "camera_info.yml")
-        depth_to_rgb = self._load_yaml(self.config_dir / "depth_to_rgb.yml")
-        orbbec_depth = self._load_yaml(self.config_dir / "orbbec_depth.yml")
-        orbbec_rgb = self._load_yaml(self.config_dir / "orbbec_rgb.yml")
-
-        params = {}
-
-        # Process main RGB camera parameters
-        rgb_matrix = orbbec_rgb["camera"]["cam_matrix"]
-        params["main_rgb"] = CameraParams(
-            intrinsic=np.array(
-                [[rgb_matrix[0], rgb_matrix[4], rgb_matrix[2], rgb_matrix[5]]],
-                dtype=np.float32,
-            )
-        )
-
-        # Process main depth camera parameters and its extrinsic transformation
-        depth_matrix = orbbec_depth["camera"]["cam_matrix"]
-        rot = np.array(depth_to_rgb["extrinsic"]["rot"]).reshape(3, 3)
-        trans = np.array(depth_to_rgb["extrinsic"]["trans"]).reshape(3, 1)
-        depth_extrinsic = np.vstack(
-            [np.hstack([rot, trans]), np.array([0, 0, 0, 1], dtype=np.float32)]
-        ).astype(np.float32)
-
-        params["main_depth"] = CameraParams(
-            intrinsic=np.array(
-                [[depth_matrix[0], depth_matrix[4], depth_matrix[2], depth_matrix[5]]],
-                dtype=np.float32,
-            ),
-            extrinsic=depth_extrinsic,
-        )
-
-        # Process additional cameras (left, right, fisheye)
-        for cam_id in ["cam1", "cam2", "cam3"]:
-            cam_key = {"cam1": "left", "cam2": "right", "cam3": "fisheye"}[cam_id]
-            params[cam_key] = CameraParams(
-                intrinsic=np.array(
-                    [camera_info[cam_id]["intrinsics"]], dtype=np.float32
-                ),
-                extrinsic=np.array(camera_info[cam_id]["T_cn_cnm1"], dtype=np.float32),
-            )
-
-        return params
 
 
 class McapProcessor:
@@ -176,14 +85,8 @@ class McapProcessor:
 
         for ros_msg in self.get_messages_by_topic(topic, schema_name):
             try:
-                if compressed:
-                    image = Image.open(BytesIO(ros_msg.data))
-                    images.append(np.array(image))
-                else:
-                    height, width = 400, 640  # Default dimensions for depth images
-                    dtype = np.dtype("uint16").newbyteorder("<")
-                    img_array = np.frombuffer(ros_msg.data, dtype=dtype)
-                    images.append(img_array.reshape(height, width, 1))
+                image = Image.open(BytesIO(ros_msg.data))
+                images.append(np.array(image))
             except Exception as e:
                 logger.error(f"Error processing image from topic {topic}: {e}")
                 continue
@@ -194,31 +97,34 @@ class McapProcessor:
         """
         Extract robot joint state data
         Returns:
-            List of numpy arrays containing joint positions (177 joints)
+            List of numpy arrays containing joint positions (16 joints)
         """
         joint_msgs = self.get_messages_by_topic(
-            "/joint_states", "sensor_msgs/JointState"
+            "io_teleop/joint_states", "sensor_msgs/JointState"
         )
-        return [
-            np.array(msg.position, dtype=np.float32).reshape(1, 177)
-            for msg in joint_msgs
-        ]
+        return [np.array(msg.position, dtype=np.float32) for msg in joint_msgs]
 
-    def get_touch_data(self) -> List[np.ndarray]:
+    def get_joint_commands(self) -> List[np.ndarray]:
         """
-        Extract tactile sensor data from all fingers
+        Extract joint command data
         Returns:
-            List of numpy arrays containing touch sensor readings
+            List of numpy arrays containing joint commands (12 joints)
         """
-        touch_msgs = self.get_messages_by_topic(
-            "/mocap/touch_data", "io_msgs/squashed_touch"
+        joint_cmd_msgs = self.get_messages_by_topic(
+            "io_teleop/joint_cmd", "sensor_msgs/JointState"
         )
-        return [
-            np.array(
-                [np.array(finger.data)[:96] for finger in msg.data], dtype=np.int32
-            )
-            for msg in touch_msgs
-        ]
+        return [np.array(msg.position, dtype=np.float32) for msg in joint_cmd_msgs]
+
+    def get_gripper_status(self) -> List[np.ndarray]:
+        """
+        Extract gripper status data
+        Returns:
+            List of numpy arrays containing gripper status (2 grippers)
+        """
+        gripper_msgs = self.get_messages_by_topic(
+            "io_teleop/target_gripper_status", "sensor_msgs/JointState"
+        )
+        return [np.array(msg.position, dtype=np.float32) for msg in gripper_msgs]
 
     def get_ee_poses(self) -> np.ndarray:
         """
@@ -231,44 +137,37 @@ class McapProcessor:
 
         # Process left end effector poses
         for pose_msg in self.get_messages_by_topic(
-            "/left_ee_pose", "geometry_msgs/PoseStamped"
+            "io_teleop/target_ee_poses", "geometry_msgs/PoseArray"
         ):
-            pose = pose_msg.pose
+            pose = pose_msg.poses
             left_poses.append(
                 [
-                    pose.position.x,
-                    pose.position.y,
-                    pose.position.z,
-                    pose.orientation.w,
-                    pose.orientation.x,
-                    pose.orientation.y,
-                    pose.orientation.z,
+                    pose[0].position.x,
+                    pose[0].position.y,
+                    pose[0].position.z,
+                    pose[0].orientation.w,
+                    pose[0].orientation.x,
+                    pose[0].orientation.y,
+                    pose[0].orientation.z,
                 ]
             )
-
-        # Process right end effector poses
-        for pose_msg in self.get_messages_by_topic(
-            "/right_ee_pose", "geometry_msgs/PoseStamped"
-        ):
-            pose = pose_msg.pose
             right_poses.append(
                 [
-                    pose.position.x,
-                    pose.position.y,
-                    pose.position.z,
-                    pose.orientation.w,
-                    pose.orientation.x,
-                    pose.orientation.y,
-                    pose.orientation.z,
+                    pose[1].position.x,
+                    pose[1].position.y,
+                    pose[1].position.z,
+                    pose[1].orientation.w,
+                    pose[1].orientation.x,
+                    pose[1].orientation.y,
+                    pose[1].orientation.z,
                 ]
             )
 
         # Combine poses ensuring equal length
-        min_length = min(len(left_poses), len(right_poses))
         return np.hstack(
             [
-                np.array(left_poses[:min_length], dtype=np.float32),
-                np.array(right_poses[:min_length], dtype=np.float32),
+                np.array(left_poses, dtype=np.float32),
+                np.array(right_poses, dtype=np.float32),
             ]
         )
 
@@ -279,9 +178,9 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
     This dataset contains egocentric, real-world data of embodied intelligence manipulation.
     """
 
-    VERSION = tfds.core.Version("2.0.0")
+    VERSION = tfds.core.Version("2.2.0")
     RELEASE_NOTES = {
-        "2.0.0": "Convert mcap to RLDS.",
+        "2.2.0": "Data from teleop to RLDS.",
     }
 
     def __init__(self, *args, **kwargs):
@@ -301,7 +200,7 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
         """
         return tfds.core.DatasetInfo(
             builder=self,
-            description="IO-ULTRA-EMBODIMENT-DATASET: An egocentric, real-world dataset of embodied intelligence manipulation.",
+            description="IO-TELEOP-DATASET: A real-world dataset of robotic manipulation based on human-in-the-loop solutions.",
             features=tfds.features.FeaturesDict(
                 {
                     "steps": tfds.features.Dataset(
@@ -309,97 +208,54 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                             "observation": tfds.features.FeaturesDict(
                                 {
                                     # Camera images from different views
-                                    "image": tfds.features.Image(
-                                        shape=(1080, 1920, 3),
+                                    "image01": tfds.features.Image(
+                                        shape=(480, 640, 3),
                                         dtype=np.uint8,
-                                        doc="Main camera RGB observation.",
+                                        doc="Camera 01 RGB observation.",
                                     ),
-                                    "depth": tfds.features.Image(
-                                        shape=(400, 640, 1),
-                                        dtype=np.uint16,
-                                        doc="Main camera depth observation.",
-                                    ),
-                                    "image_left": tfds.features.Image(
-                                        shape=(1080, 1920, 3),
+                                    "image02": tfds.features.Image(
+                                        shape=(480, 640, 3),
                                         dtype=np.uint8,
-                                        doc="Left camera RGB observation.",
+                                        doc="Camera 02 RGB observation.",
                                     ),
-                                    "image_right": tfds.features.Image(
-                                        shape=(1080, 1920, 3),
+                                    "image03": tfds.features.Image(
+                                        shape=(480, 640, 3),
                                         dtype=np.uint8,
-                                        doc="Right camera RGB observation.",
+                                        doc="Camera 03 RGB observation.",
                                     ),
-                                    "image_fisheye": tfds.features.Image(
-                                        shape=(1080, 1920, 3),
+                                    "image04": tfds.features.Image(
+                                        shape=(480, 640, 3),
                                         dtype=np.uint8,
-                                        doc="Fisheye camera observation.",
-                                    ),
-                                    # Camera intrinsic parameters
-                                    "main_rgb_intrinsic": tfds.features.Tensor(
-                                        shape=(1, 4),
-                                        dtype=np.float32,
-                                        doc="Main RGB camera intrinsic parameters: fx, fy, cx, cy",
-                                    ),
-                                    "main_depth_intrinsic": tfds.features.Tensor(
-                                        shape=(1, 4),
-                                        dtype=np.float32,
-                                        doc="Main depth camera intrinsic parameters: fx, fy, cx, cy",
-                                    ),
-                                    "left_camera_intrinsic": tfds.features.Tensor(
-                                        shape=(1, 4),
-                                        dtype=np.float32,
-                                        doc="Left camera intrinsic parameters: fx, fy, cx, cy",
-                                    ),
-                                    "right_camera_intrinsic": tfds.features.Tensor(
-                                        shape=(1, 4),
-                                        dtype=np.float32,
-                                        doc="Right camera intrinsic parameters: fx, fy, cx, cy",
-                                    ),
-                                    "fisheye_camera_intrinsic": tfds.features.Tensor(
-                                        shape=(1, 4),
-                                        dtype=np.float32,
-                                        doc="Fisheye camera intrinsic parameters: fx, fy, cx, cy",
-                                    ),
-                                    # Camera extrinsic parameters (transformations)
-                                    "main_depth_to_main_rgb_extrinsic": tfds.features.Tensor(
-                                        shape=(4, 4),
-                                        dtype=np.float32,
-                                        doc="Extrinsic parameters of main depth camera relative to main RGB camera.",
-                                    ),
-                                    "left_camera_to_main_rgb_extrinsic": tfds.features.Tensor(
-                                        shape=(4, 4),
-                                        dtype=np.float32,
-                                        doc="Extrinsic parameters of left camera relative to main RGB camera.",
-                                    ),
-                                    "right_to_main_rgb_extrinsic": tfds.features.Tensor(
-                                        shape=(4, 4),
-                                        dtype=np.float32,
-                                        doc="Extrinsic parameters of right camera relative to main RGB camera.",
-                                    ),
-                                    "fisheye_camera_to_main_rgb_extrinsic": tfds.features.Tensor(
-                                        shape=(4, 4),
-                                        dtype=np.float32,
-                                        doc="Extrinsic parameters of fisheye camera relative to main RGB camera.",
+                                        doc="Camera 04 RGB observation.",
                                     ),
                                     # Robot state data
                                     "joint_states": tfds.features.Tensor(
-                                        shape=(1, 177),
+                                        shape=(16,),
                                         dtype=np.float32,
-                                        doc="The joint states of 177 joints.",
-                                    ),
-                                    "fingers_haptics": tfds.features.Tensor(
-                                        shape=(10, 96),
-                                        dtype=np.int32,
-                                        doc="The haptic data of ten fingers (resolution of 12 * 8).",
+                                        doc="16 joint positions of the robot.",
                                     ),
                                 }
                             ),
-                            # Robot action data (end effector poses)
-                            "action": tfds.features.Tensor(
-                                shape=(14,),
-                                dtype=np.float32,
-                                doc="Robot end effector pose based on main RGB camera link, consists of [3x left EEF position, 4x left EEF orientation quaternions,"
-                                "3x right EEF position, 4x right EEF orientation quaternions].",
+                            # Teleop command data
+                            "action": tfds.features.FeaturesDict(
+                                {
+                                    "joint_commands": tfds.features.Tensor(
+                                        shape=(12,),
+                                        dtype=np.float32,
+                                        doc="Commands for the 12 joint positions.",
+                                    ),
+                                    "gripper_status": tfds.features.Tensor(
+                                        shape=(2,),
+                                        dtype=np.float32,
+                                        doc="2x gripper status. The first is right, the second is left. The range of values is [0, 1], where 0 means that the gripper is fully open and 1 means that the gripper is fully closed.",
+                                    ),
+                                    "ee_poses": tfds.features.Tensor(
+                                        shape=(14,),
+                                        dtype=np.float32,
+                                        doc="Target end effector pose based on VR frame, consists of [3x right EEF position, 4x right EEF orientation quaternions,"
+                                        "3x left EEF position, 4x left EEF orientation quaternions]. Not sent directly to the robot.",
+                                    ),
+                                }
                             ),
                             # Episode information
                             "discount": tfds.features.Scalar(
@@ -480,10 +336,8 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             episode_path = Path(episode_path)
             mcap_path = episode_path / "data.mcap"
             json_path = episode_path / "annotation.json"
-            config_dir = episode_path / "config"
 
             # Load configuration and language instruction
-            config_manager = ConfigManager(config_dir)
             language_instruction = _read_json_data(json_path)
             language_embedding = self._embed([language_instruction])[0].numpy()
 
@@ -491,36 +345,35 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
             mcap_processor = McapProcessor(mcap_path)
 
             # Extract all required data
-            rgb_images = mcap_processor.get_images(
-                "/rgbd/color/image_raw/compressed", compressed=True
+            image01 = mcap_processor.get_images(
+                "/ob_camera_01/color/image_raw/compressed"
             )
-            depth_images = mcap_processor.get_images(
-                "/rgbd/depth/image_raw", compressed=False
+            image02 = mcap_processor.get_images(
+                "/ob_camera_02/color/image_raw/compressed"
             )
-            left_images = mcap_processor.get_images(
-                "/usb_cam_left/mjpeg_raw/compressed"
+            image03 = mcap_processor.get_images(
+                "/ob_camera_03/color/image_raw/compressed"
             )
-            right_images = mcap_processor.get_images(
-                "/usb_cam_right/mjpeg_raw/compressed"
-            )
-            fisheye_images = mcap_processor.get_images(
-                "/usb_cam_fisheye/mjpeg_raw/compressed"
+            image04 = mcap_processor.get_images(
+                "/ob_camera_04/color/image_raw/compressed"
             )
             joint_states = mcap_processor.get_joint_states()
-            haptic_data = mcap_processor.get_touch_data()
-            action_data = mcap_processor.get_ee_poses()
+            joint_commands = mcap_processor.get_joint_commands()
+            gripper_status = mcap_processor.get_gripper_status()
+            ee_poses = mcap_processor.get_ee_poses()
 
             # Verify data consistency
             data_lengths = [
                 len(x)
                 for x in [
-                    rgb_images,
-                    depth_images,
-                    left_images,
-                    right_images,
-                    fisheye_images,
+                    image01,
+                    image02,
+                    image03,
+                    image04,
                     joint_states,
-                    haptic_data,
+                    joint_commands,
+                    gripper_status,
+                    ee_poses,
                 ]
             ]
             data_length = min(data_lengths)
@@ -530,25 +383,6 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                     f"Inconsistent data lengths in {episode_path}: {data_lengths}"
                 )
 
-            # Get camera parameters
-            main_rgb_intrinsic = config_manager.camera_params["main_rgb"].intrinsic
-            main_depth_intrinsic = config_manager.camera_params["main_depth"].intrinsic
-            main_depth_to_main_rgb_extrinsic = config_manager.camera_params[
-                "main_depth"
-            ].extrinsic
-            left_camera_intrinsic = config_manager.camera_params["left"].intrinsic
-            left_camera_to_main_rgb_extrinsic = config_manager.camera_params[
-                "left"
-            ].extrinsic
-            right_camera_intrinsic = config_manager.camera_params["right"].intrinsic
-            right_to_main_rgb_extrinsic = config_manager.camera_params[
-                "right"
-            ].extrinsic
-            fisheye_camera_intrinsic = config_manager.camera_params["fisheye"].intrinsic
-            fisheye_camera_to_main_rgb_extrinsic = config_manager.camera_params[
-                "fisheye"
-            ].extrinsic
-
             # Create episode data structure
             episode = []
             for i in range(data_length):
@@ -556,46 +390,36 @@ class IoUltraEmbodimentDataset(tfds.core.GeneratorBasedBuilder):
                     {
                         "observation": {
                             # Images from all cameras
-                            "image": (
-                                rgb_images[i]
-                                if i < len(rgb_images)
-                                else rgb_images[i - 1]
+                            "image01": (
+                                image01[i] if i < len(image01) else image01[i - 1]
                             ),
-                            "depth": (
-                                depth_images[i]
-                                if i < len(depth_images)
-                                else depth_images[i - 1]
+                            "image02": (
+                                image02[i] if i < len(image02) else image02[i - 1]
                             ),
-                            "image_left": (
-                                left_images[i]
-                                if i < len(left_images)
-                                else left_images[i - 1]
+                            "image03": (
+                                image03[i] if i < len(image03) else image03[i - 1]
                             ),
-                            "image_right": (
-                                right_images[i]
-                                if i < len(right_images)
-                                else right_images[i - 1]
+                            "image04": (
+                                image04[i] if i < len(image04) else image04[i - 1]
                             ),
-                            "image_fisheye": (
-                                fisheye_images[i]
-                                if i < len(fisheye_images)
-                                else fisheye_images[i - 1]
-                            ),
-                            # Camera parameters
-                            "main_rgb_intrinsic": main_rgb_intrinsic,
-                            "main_depth_intrinsic": main_depth_intrinsic,
-                            "left_camera_intrinsic": left_camera_intrinsic,
-                            "right_camera_intrinsic": right_camera_intrinsic,
-                            "fisheye_camera_intrinsic": fisheye_camera_intrinsic,
-                            "main_depth_to_main_rgb_extrinsic": main_depth_to_main_rgb_extrinsic,
-                            "left_camera_to_main_rgb_extrinsic": left_camera_to_main_rgb_extrinsic,
-                            "right_to_main_rgb_extrinsic": right_to_main_rgb_extrinsic,
-                            "fisheye_camera_to_main_rgb_extrinsic": fisheye_camera_to_main_rgb_extrinsic,
                             # Robot state data
                             "joint_states": joint_states[i],
-                            "fingers_haptics": haptic_data[i],
                         },
-                        "action": action_data[i],
+                        "action": {
+                            "joint_commands": (
+                                joint_commands[i]
+                                if i < len(joint_commands)
+                                else joint_commands[i - 1]
+                            ),
+                            "gripper_status": (
+                                gripper_status[i]
+                                if i < len(gripper_status)
+                                else gripper_status[i - 1]
+                            ),
+                            "ee_poses": (
+                                ee_poses[i] if i < len(ee_poses) else ee_poses[i - 1]
+                            ),
+                        },
                         "discount": 1.0,
                         "reward": float(i == (data_length - 1)),
                         "is_first": i == 0,

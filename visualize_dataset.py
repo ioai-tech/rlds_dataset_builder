@@ -34,29 +34,50 @@ ds = ds.shuffle(100)
 
 # visualize episodes
 for i, episode in enumerate(ds.take(5)):
-    images = []
+    images01 = []
+    images02 = []
+    images03 = []
+    images04 = []
     for step in episode["steps"]:
-        images.append(step["observation"]["image"].numpy())
-    image_strip = np.concatenate(images[::4], axis=1)
+        images01.append(step["observation"]["image01"].numpy())
+        images02.append(step["observation"]["image02"].numpy())
+        images03.append(step["observation"]["image03"].numpy())
+        images04.append(step["observation"]["image04"].numpy())
+    image_strip_01 = np.concatenate(images01[::4], axis=1)
+    image_strip_02 = np.concatenate(images02[::4], axis=1)
+    image_strip_03 = np.concatenate(images03[::4], axis=1)
+    image_strip_04 = np.concatenate(images04[::4], axis=1)
     caption = step["language_instruction"].numpy().decode() + " (temp. downsampled 4x)"
 
     if render_wandb:
-        wandb.log({f"image_{i}": wandb.Image(image_strip, caption=caption)})
+        wandb.log({f"image01_{i}": wandb.Image(image_strip_01, caption=caption)})
+        wandb.log({f"image02_{i}": wandb.Image(image_strip_02, caption=caption)})
+        wandb.log({f"image03_{i}": wandb.Image(image_strip_03, caption=caption)})
+        wandb.log({f"image04_{i}": wandb.Image(image_strip_04, caption=caption)})
     else:
         plt.figure()
-        plt.imshow(image_strip)
+        plt.imshow(image_strip_01)
+        plt.imshow(image_strip_02)
+        plt.imshow(image_strip_03)
+        plt.imshow(image_strip_04)
         plt.title(caption)
 
 # visualize action and state statistics
-actions, states = [], []
+joint_states, joint_commands, gripper_status, ee_poses = [], [], [], []
 for episode in tqdm.tqdm(ds.take(500)):
     for step in episode["steps"]:
-        actions.append(step["action"].numpy())
-        # states.append(step['observation']['state'].numpy())
-actions = np.array(actions)
-# states = np.array(states)
-action_mean = actions.mean(0)
-# state_mean = states.mean(0)
+        joint_states.append(step["observation"]["joint_states"].numpy())
+        joint_commands.append(step["action"]["joint_commands"].numpy())
+        gripper_status.append(step["action"]["gripper_status"].numpy())
+        ee_poses.append(step["action"]["ee_poses"].numpy())
+joint_states = np.array(joint_states)
+joint_commands = np.array(joint_commands)
+gripper_status = np.array(gripper_status)
+ee_poses = np.array(ee_poses)
+joint_states_mean = joint_states.mean(0)
+joint_commands_mean = joint_commands.mean(0)
+gripper_status_mean = gripper_status.mean(0)
+ee_poses_mean = ee_poses.mean(0)
 
 
 def vis_stats(vector, vector_mean, tag):
@@ -75,8 +96,10 @@ def vis_stats(vector, vector_mean, tag):
         wandb.log({tag: wandb.Image(fig)})
 
 
-vis_stats(actions, action_mean, "action_stats")
-# vis_stats(states, state_mean, 'state_stats')
+vis_stats(joint_states, joint_states_mean, "joint_states_stats")
+vis_stats(joint_commands, joint_commands_mean, "joint_commands_stats")
+vis_stats(gripper_status, gripper_status_mean, "gripper_status_stats")
+vis_stats(ee_poses, ee_poses_mean, "ee_poses_stats")
 
 if not render_wandb:
     plt.show()
