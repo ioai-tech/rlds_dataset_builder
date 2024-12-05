@@ -51,9 +51,7 @@ class McapProcessor:
             for schema, channel, message, ros_msg in reader.iter_decoded_messages():
                 self.messages.append((schema, channel, ros_msg))
 
-    def get_messages_by_topic(
-        self, topic: str, schema_name: Optional[str] = None
-    ) -> List[Any]:
+    def get_messages_by_topic(self, topic: str) -> List[Any]:
         """
         Retrieve messages for a specific ROS topic
         Args:
@@ -66,24 +64,19 @@ class McapProcessor:
             ros_msg
             for schema, channel, ros_msg in self.messages
             if channel.topic == topic
-            and (schema_name is None or schema.name == schema_name)
         ]
 
-    def get_images(self, topic: str, compressed: bool = True) -> List[np.ndarray]:
+    def get_images(self, topic: str) -> List[np.ndarray]:
         """
         Extract image data from ROS messages
         Args:
             topic: Image topic name
-            compressed: Whether the image is compressed
         Returns:
             List of numpy arrays containing image data
         """
-        schema_name = (
-            "sensor_msgs/CompressedImage" if compressed else "sensor_msgs/Image"
-        )
         images = []
 
-        for ros_msg in self.get_messages_by_topic(topic, schema_name):
+        for ros_msg in self.get_messages_by_topic(topic):
             try:
                 image = Image.open(BytesIO(ros_msg.data))
                 images.append(np.array(image))
@@ -99,9 +92,7 @@ class McapProcessor:
         Returns:
             List of numpy arrays containing joint positions (16 joints)
         """
-        joint_msgs = self.get_messages_by_topic(
-            "io_teleop/joint_states", "sensor_msgs/JointState"
-        )
+        joint_msgs = self.get_messages_by_topic("io_teleop/joint_states")
         return [np.array(msg.position, dtype=np.float32) for msg in joint_msgs]
 
     def get_joint_commands(self) -> List[np.ndarray]:
@@ -110,9 +101,7 @@ class McapProcessor:
         Returns:
             List of numpy arrays containing joint commands (12 joints)
         """
-        joint_cmd_msgs = self.get_messages_by_topic(
-            "io_teleop/joint_cmd", "sensor_msgs/JointState"
-        )
+        joint_cmd_msgs = self.get_messages_by_topic("io_teleop/joint_cmd")
         return [np.array(msg.position, dtype=np.float32) for msg in joint_cmd_msgs]
 
     def get_gripper_status(self) -> List[np.ndarray]:
@@ -121,9 +110,7 @@ class McapProcessor:
         Returns:
             List of numpy arrays containing gripper status (2 grippers)
         """
-        gripper_msgs = self.get_messages_by_topic(
-            "io_teleop/target_gripper_status", "sensor_msgs/JointState"
-        )
+        gripper_msgs = self.get_messages_by_topic("io_teleop/target_gripper_status")
         return [np.array(msg.position, dtype=np.float32) for msg in gripper_msgs]
 
     def get_ee_poses(self) -> np.ndarray:
@@ -136,9 +123,7 @@ class McapProcessor:
         right_poses = []
 
         # Process left end effector poses
-        for pose_msg in self.get_messages_by_topic(
-            "io_teleop/target_ee_poses", "geometry_msgs/PoseArray"
-        ):
+        for pose_msg in self.get_messages_by_topic("io_teleop/target_ee_poses"):
             pose = pose_msg.poses
             left_poses.append(
                 [
